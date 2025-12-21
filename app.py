@@ -1,4 +1,6 @@
 import gradio as gr
+import gc
+import subprocess
 
 import os
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
@@ -17,6 +19,31 @@ from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.renderers import EnvMap
 from trellis2.utils import render_utils
 import o_voxel
+
+
+def free_gpu_memory():
+    """Kill non-essential GPU processes to free VRAM before heavy operations."""
+    safe_to_kill = ['cosmic-files', 'cosmic-files-applet']
+
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-compute-apps=pid,process_name', '--format=csv,noheader'],
+            capture_output=True, text=True
+        )
+        for line in result.stdout.strip().split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split(', ')
+            if len(parts) >= 2:
+                pid, name = parts[0], parts[1]
+                if any(safe in name for safe in safe_to_kill):
+                    subprocess.run(['kill', pid], capture_output=True)
+                    gr.Info(f"Closed {name} to free GPU memory")
+    except Exception:
+        pass  # Non-critical, continue anyway
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 MAX_SEED = np.iinfo(np.int32).max
@@ -368,6 +395,7 @@ def image_to_3d(
     progress=gr.Progress(track_tqdm=True),
 ) -> str:
     # --- Sampling ---
+    free_gpu_memory()
     outputs, latents = pipeline.run(
         image,
         seed=seed,
@@ -490,26 +518,66 @@ def extract_glb(
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     shape_slat, tex_slat, res = unpack_state(state)
     mesh = pipeline.decode_latent(shape_slat, tex_slat, res)[0]
-    glb = o_voxel.postprocess.to_glb(
-        vertices=mesh.vertices,
-        faces=mesh.faces,
-        attr_volume=mesh.attrs,
-        coords=mesh.coords,
-        attr_layout=pipeline.pbr_attr_layout,
-        grid_size=res,
-        aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-        decimation_target=decimation_target,
-        texture_size=texture_size,
-        remesh=True,
-        remesh_band=1,
-        remesh_project=0,
-        use_tqdm=True,
-    )
+
+    # Free the SparseTensors - no longer needed after decode
+    del shape_slat
+    del tex_slat
+
+    # Ensure models are on CPU (should already be due to low_vram)
+    for model in pipeline.models.values():
+        model.cpu()
+    pipeline.image_cond_model.cpu()
+
+    # Aggressive memory cleanup - also kills non-essential GPU processes
+    free_gpu_memory()
+
+    # Retry with fallbacks on OOM: first disable remeshing, then reduce decimation
+    max_retries = 3
+    current_decimation = decimation_target
+    use_remesh = True
+    glb = None
+
+    for attempt in range(max_retries):
+        try:
+            torch.cuda.empty_cache()
+            glb = o_voxel.postprocess.to_glb(
+                vertices=mesh.vertices,
+                faces=mesh.faces,
+                attr_volume=mesh.attrs,
+                coords=mesh.coords,
+                attr_layout=pipeline.pbr_attr_layout,
+                grid_size=res,
+                aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                decimation_target=current_decimation,
+                texture_size=texture_size,
+                remesh=use_remesh,
+                remesh_band=1,
+                remesh_project=0,
+                use_tqdm=True,
+            )
+            break  # Success
+        except (RuntimeError, torch.OutOfMemoryError) as e:
+            if "out of memory" in str(e).lower() and attempt < max_retries - 1:
+                torch.cuda.empty_cache()
+                gc.collect()
+                if use_remesh:
+                    use_remesh = False
+                    gr.Warning("GPU memory exceeded, retrying without remeshing...")
+                else:
+                    current_decimation = current_decimation // 2
+                    gr.Warning(f"GPU memory exceeded, retrying with {current_decimation} faces...")
+            else:
+                raise
     now = datetime.now()
     timestamp = now.strftime("%Y-%m-%dT%H%M%S") + f".{now.microsecond // 1000:03d}"
     os.makedirs(user_dir, exist_ok=True)
     glb_path = os.path.join(user_dir, f'sample_{timestamp}.glb')
     glb.export(glb_path, extension_webp=True)
+
+    # Restore models to GPU for next generation
+    for model in pipeline.models.values():
+        model.cuda()
+    pipeline.image_cond_model.cuda()
     torch.cuda.empty_cache()
     return glb_path, glb_path
 

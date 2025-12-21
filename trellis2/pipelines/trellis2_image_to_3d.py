@@ -462,6 +462,11 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         """
         meshes, subs = self.decode_shape_slat(shape_slat, resolution)
         tex_voxels = self.decode_tex_slat(tex_slat, subs)
+
+        # Free intermediate tensors before memory-intensive mesh post-processing
+        del subs
+        torch.cuda.empty_cache()
+
         out_mesh = []
         for m, v in zip(meshes, tex_voxels):
             m.fill_holes()

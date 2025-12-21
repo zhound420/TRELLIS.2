@@ -43,6 +43,27 @@ Data processing is streamlined for instant conversions that are fully **renderin
 *   **< 100ms** (CUDA): O-Voxel → Textured Mesh
 
 
+## 🔧 Fork Changes
+
+This fork includes the following modifications:
+
+### Interactive Control Script
+A new `trellis.sh` script provides a menu-driven interface to manage the Gradio app:
+```bash
+./trellis.sh
+```
+Options: Start app, Stop app, Check status, Exit
+
+### GPU Memory Optimizations
+- **Auto-cleanup**: Automatically kills non-essential GPU processes before heavy operations
+- **OOM Retry Logic**: Automatic fallbacks on out-of-memory errors (disables remeshing, reduces decimation)
+- **Aggressive Tensor Cleanup**: Frees intermediate tensors during pipeline execution
+
+### Extended Feature Extractors
+- Added `DinoV3ConvNextFeatureExtractor` class for DINOv3 ConvNeXt models
+- Configurable image sizes for DINOv2 feature extraction
+
+
 ## 🗺️ Roadmap
 
 - [x] Paper release
