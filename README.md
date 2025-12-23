@@ -47,6 +47,21 @@ Data processing is streamlined for instant conversions that are fully **renderin
 
 This fork includes the following modifications:
 
+### 3MF Export for Full-Color 3D Printing
+Export generated models in 3MF format with embedded textures for direct use with full-color 3D printers:
+- **Full PBR textures**: Base color, metallic, roughness embedded in the 3MF file
+- **Configurable scale**: Set real-world dimensions in millimeters
+- **Materials Extension**: Uses 3MF Materials Extension for texture support
+- Compatible with Windows 3D Viewer, Blender, PrusaSlicer, and other 3MF-compatible software
+
+### Custom Unified3D Viewer Component
+A custom Gradio component (`gradio-unified3d`) built with Three.js for viewing both GLB and 3MF formats:
+- **Dual format support**: GLB (via GLTFLoader) and 3MF (via ThreeMFLoader)
+- **PBR rendering**: Full PBR materials with ACES Filmic tone mapping
+- **HDRI environment lighting**: Support for .hdr and .exr environment maps
+- **Smooth controls**: OrbitControls with configurable zoom/pan speed
+- **Display modes**: Solid, wireframe, and point cloud rendering
+
 ### Interactive Control Script
 A new `trellis.sh` script provides a menu-driven interface to manage the Gradio app:
 ```bash
@@ -186,22 +201,44 @@ glb = o_voxel.postprocess.to_glb(
     verbose             =   True
 )
 glb.export("sample.glb", extension_webp=True)
+
+# 6. Export to 3MF (for full-color 3D printing)
+o_voxel.postprocess.to_3mf(
+    vertices            =   mesh.vertices,
+    faces               =   mesh.faces,
+    attr_volume         =   mesh.attrs,
+    coords              =   mesh.coords,
+    attr_layout         =   mesh.layout,
+    grid_size           =   mesh.voxel_size,
+    aabb                =   [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+    decimation_target   =   500000,
+    texture_size        =   2048,
+    remesh              =   True,
+    output_path         =   "sample.3mf",
+    scale_mm            =   100.0,  # 100mm scale
+)
 ```
 
 Upon execution, the script generates the following files:
  - `sample.mp4`: A video visualizing the generated 3D asset with PBR materials and environmental lighting.
  - `sample.glb`: The extracted PBR-ready 3D asset in GLB format.
+ - `sample.3mf`: The 3D asset in 3MF format with embedded textures for full-color 3D printing.
 
 **Note:** The `.glb` file is exported in `OPAQUE` mode by default. Although the alpha channel is preserved within the texture map, it is not active initially. To enable transparency, import the asset into your 3D software and manually connect the texture's alpha channel to the material's opacity or alpha input.
 
 #### Web Demo
 
-[app.py](app.py) provides a simple web demo for image to 3D asset generation. you can run the demo with the following command:
+[app.py](app.py) provides a web demo for image to 3D asset generation with the following features:
+- **Export format selection**: Choose between GLB (for rendering) or 3MF (for 3D printing)
+- **Unified 3D viewer**: View both GLB and 3MF files in the browser with Three.js
+- **Adjustable parameters**: Decimation target, texture size, and 3MF scale
+
+Run the demo:
 ```sh
 python app.py
 ```
 
-Then, you can access the demo at the address shown in the terminal.
+Then, access the demo at the address shown in the terminal (default: http://127.0.0.1:7860).
 
 ### 2. PBR Texture Generation
 

@@ -77,11 +77,15 @@ if [ "$NEW_ENV" = true ] ; then
 fi
 
 if [ "$BASIC" = true ] ; then
-    pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh transformers gradio==6.0.1 tensorboard pandas lpips zstandard lib3mf
+    pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh transformers gradio>=6.0.1 tensorboard pandas lpips zstandard lib3mf
     pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
     sudo apt install -y libjpeg-dev
     pip install pillow-simd
     pip install kornia timm
+    # Install custom Unified3D Gradio component for GLB/3MF viewer
+    if [ -d "gradio-unified3d" ] ; then
+        pip install ./gradio-unified3d --no-build-isolation
+    fi
 fi
 
 if [ "$FLASHATTN" = true ] ; then
