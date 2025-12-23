@@ -46,3 +46,22 @@ glb = o_voxel.postprocess.to_glb(
     verbose             =   True
 )
 glb.export("sample.glb", extension_webp=True)
+
+# 6. Export to 3MF (for 3D printing with color textures)
+o_voxel.postprocess.to_3mf(
+    vertices            =   mesh.vertices,
+    faces               =   mesh.faces,
+    attr_volume         =   mesh.attrs,
+    coords              =   mesh.coords,
+    attr_layout         =   mesh.layout,
+    voxel_size          =   mesh.voxel_size,
+    aabb                =   [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+    decimation_target   =   1000000,
+    texture_size        =   4096,
+    remesh              =   True,
+    remesh_band         =   1,
+    remesh_project      =   0,
+    output_path         =   "sample.3mf",
+    scale_mm            =   100.0,  # 100mm = 10cm model
+    verbose             =   True
+)

@@ -19,6 +19,7 @@ from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.renderers import EnvMap
 from trellis2.utils import render_utils
 import o_voxel
+from gradio_unified3d import Unified3D
 
 
 def free_gpu_memory():
@@ -59,6 +60,26 @@ MODES = [
 STEPS = 8
 DEFAULT_MODE = 3
 DEFAULT_STEP = 3
+
+
+def create_3mf_viewer_html(file_url: str) -> str:
+    """Generate HTML for 3MF export complete message."""
+    return f'''
+    <div style="width: 100%; height: 600px; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff;">
+        <div style="font-size: 48px; margin-bottom: 20px;">📦</div>
+        <div style="font-size: 24px; font-weight: bold; margin-bottom: 10px;">3MF Export Complete</div>
+        <div style="font-size: 14px; color: #aaa; margin-bottom: 20px;">Full-color 3D printing format with textures</div>
+        <div style="font-size: 12px; color: #888; text-align: center; max-width: 400px;">
+            Click the Download button below to save your 3MF file.<br>
+            Open in Windows 3D Viewer, Blender, or your slicer software.
+        </div>
+        <div style="margin-top: 30px; padding: 10px 20px; background: #2d4a3e; border-radius: 4px; font-size: 12px;">
+            <a href="https://3dviewer.net" target="_blank" style="color: #8fbc8f; text-decoration: none;">
+                🌐 View online at 3dviewer.net (upload your downloaded file)
+            </a>
+        </div>
+    </div>
+    '''
 
 
 css = """
@@ -501,19 +522,23 @@ def extract_glb(
     state: dict,
     decimation_target: int,
     texture_size: int,
-    req: gr.Request,
+    export_format: str = "GLB",
+    scale_mm: float = 100.0,
+    req: gr.Request = None,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[str, str]:
     """
-    Extract a GLB file from the 3D model.
+    Extract a GLB or 3MF file from the 3D model.
 
     Args:
         state (dict): The state of the generated 3D model.
         decimation_target (int): The target face count for decimation.
         texture_size (int): The texture resolution.
+        export_format (str): Export format ("GLB" or "3MF").
+        scale_mm (float): Scale in mm for 3MF export.
 
     Returns:
-        str: The path to the extracted GLB file.
+        str: The path to the extracted file.
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     shape_slat, tex_slat, res = unpack_state(state)
@@ -535,58 +560,102 @@ def extract_glb(
     max_retries = 3
     current_decimation = decimation_target
     use_remesh = True
-    glb = None
+    result = None
 
-    for attempt in range(max_retries):
-        try:
-            torch.cuda.empty_cache()
-            glb = o_voxel.postprocess.to_glb(
-                vertices=mesh.vertices,
-                faces=mesh.faces,
-                attr_volume=mesh.attrs,
-                coords=mesh.coords,
-                attr_layout=pipeline.pbr_attr_layout,
-                grid_size=res,
-                aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-                decimation_target=current_decimation,
-                texture_size=texture_size,
-                remesh=use_remesh,
-                remesh_band=1,
-                remesh_project=0,
-                use_tqdm=True,
-            )
-            break  # Success
-        except (RuntimeError, torch.OutOfMemoryError) as e:
-            if "out of memory" in str(e).lower() and attempt < max_retries - 1:
-                torch.cuda.empty_cache()
-                gc.collect()
-                if use_remesh:
-                    use_remesh = False
-                    gr.Warning("GPU memory exceeded, retrying without remeshing...")
-                else:
-                    current_decimation = current_decimation // 2
-                    gr.Warning(f"GPU memory exceeded, retrying with {current_decimation} faces...")
-            else:
-                raise
     now = datetime.now()
     timestamp = now.strftime("%Y-%m-%dT%H%M%S") + f".{now.microsecond // 1000:03d}"
     os.makedirs(user_dir, exist_ok=True)
-    glb_path = os.path.join(user_dir, f'sample_{timestamp}.glb')
-    glb.export(glb_path, extension_webp=True)
+
+    if export_format == "3MF":
+        # Export as 3MF
+        for attempt in range(max_retries):
+            try:
+                torch.cuda.empty_cache()
+                output_path = os.path.join(user_dir, f'sample_{timestamp}.3mf')
+                o_voxel.postprocess.to_3mf(
+                    vertices=mesh.vertices,
+                    faces=mesh.faces,
+                    attr_volume=mesh.attrs,
+                    coords=mesh.coords,
+                    attr_layout=pipeline.pbr_attr_layout,
+                    grid_size=res,
+                    aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                    decimation_target=current_decimation,
+                    texture_size=texture_size,
+                    remesh=use_remesh,
+                    remesh_band=1,
+                    remesh_project=0,
+                    output_path=output_path,
+                    scale_mm=scale_mm,
+                    use_tqdm=True,
+                )
+                result = output_path
+                break  # Success
+            except (RuntimeError, torch.OutOfMemoryError) as e:
+                if "out of memory" in str(e).lower() and attempt < max_retries - 1:
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    if use_remesh:
+                        use_remesh = False
+                        gr.Warning("GPU memory exceeded, retrying without remeshing...")
+                    else:
+                        current_decimation = current_decimation // 2
+                        gr.Warning(f"GPU memory exceeded, retrying with {current_decimation} faces...")
+                else:
+                    raise
+    else:
+        # Export as GLB (default)
+        for attempt in range(max_retries):
+            try:
+                torch.cuda.empty_cache()
+                glb = o_voxel.postprocess.to_glb(
+                    vertices=mesh.vertices,
+                    faces=mesh.faces,
+                    attr_volume=mesh.attrs,
+                    coords=mesh.coords,
+                    attr_layout=pipeline.pbr_attr_layout,
+                    grid_size=res,
+                    aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                    decimation_target=current_decimation,
+                    texture_size=texture_size,
+                    remesh=use_remesh,
+                    remesh_band=1,
+                    remesh_project=0,
+                    use_tqdm=True,
+                )
+                output_path = os.path.join(user_dir, f'sample_{timestamp}.glb')
+                glb.export(output_path, extension_webp=True)
+                result = output_path
+                break  # Success
+            except (RuntimeError, torch.OutOfMemoryError) as e:
+                if "out of memory" in str(e).lower() and attempt < max_retries - 1:
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    if use_remesh:
+                        use_remesh = False
+                        gr.Warning("GPU memory exceeded, retrying without remeshing...")
+                    else:
+                        current_decimation = current_decimation // 2
+                        gr.Warning(f"GPU memory exceeded, retrying with {current_decimation} faces...")
+                else:
+                    raise
 
     # Restore models to GPU for next generation
     for model in pipeline.models.values():
         model.cuda()
     pipeline.image_cond_model.cuda()
     torch.cuda.empty_cache()
-    return glb_path, glb_path
+
+    # Return the model file path for both viewer and download
+    return result, result  # model_output, download_btn
 
 
 with gr.Blocks(delete_cache=(600, 600)) as demo:
     gr.Markdown("""
     ## Image to 3D Asset with [TRELLIS.2](https://microsoft.github.io/TRELLIS.2)
     * Upload an image (preferably with an alpha-masked foreground object) and click Generate to create a 3D asset.
-    * Click Extract GLB to export and download the generated GLB file if you're satisfied with the result. Otherwise, try another time.
+    * Choose export format: GLB (for rendering) or 3MF (for full-color 3D printing with textures).
+    * Click Extract Model to export and download when satisfied with the result.
     """)
     
     with gr.Row():
@@ -598,7 +667,9 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
             randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
             decimation_target = gr.Slider(100000, 1000000, label="Decimation Target", value=500000, step=10000)
             texture_size = gr.Slider(1024, 4096, label="Texture Size", value=2048, step=1024)
-            
+            export_format = gr.Dropdown(choices=["GLB", "3MF"], value="GLB", label="Export Format")
+            scale_mm = gr.Slider(50, 500, label="3MF Scale (mm)", value=100, step=10, visible=False)
+
             generate_btn = gr.Button("Generate")
                 
             with gr.Accordion(label="Advanced Settings", open=False):                
@@ -625,10 +696,16 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
             with gr.Walkthrough(selected=0) as walkthrough:
                 with gr.Step("Preview", id=0):
                     preview_output = gr.HTML(empty_html, label="3D Asset Preview", show_label=True, container=True)
-                    extract_btn = gr.Button("Extract GLB")
+                    extract_btn = gr.Button("Extract Model")
                 with gr.Step("Extract", id=1):
-                    glb_output = gr.Model3D(label="Extracted GLB", height=724, show_label=True, display_mode="solid", clear_color=(0.25, 0.25, 0.25, 1.0))
-                    download_btn = gr.DownloadButton(label="Download GLB")
+                    model_output = Unified3D(
+                        label="Extracted 3D Model",
+                        height=724,
+                        show_label=True,
+                        display_mode="solid",
+                        clear_color=(0.15, 0.15, 0.15, 1.0),
+                    )
+                    download_btn = gr.DownloadButton(label="Download Model")
                     
         with gr.Column(scale=1, min_width=172):
             examples = gr.Examples(
@@ -673,12 +750,19 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
         outputs=[output_buf, preview_output],
     )
     
+    # Toggle scale_mm visibility based on export format
+    export_format.change(
+        lambda fmt: gr.update(visible=(fmt == "3MF")),
+        inputs=[export_format],
+        outputs=[scale_mm],
+    )
+
     extract_btn.click(
         lambda: gr.Walkthrough(selected=1), outputs=walkthrough
     ).then(
         extract_glb,
-        inputs=[output_buf, decimation_target, texture_size],
-        outputs=[glb_output, download_btn],
+        inputs=[output_buf, decimation_target, texture_size, export_format, scale_mm],
+        outputs=[model_output, download_btn],
     )
         
 
